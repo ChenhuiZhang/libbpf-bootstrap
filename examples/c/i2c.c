@@ -4,6 +4,7 @@
 #include <sys/resource.h>
 #include <bpf/libbpf.h>
 #include <getopt.h>
+#include <time.h>
 #include "i2c.skel.h"
 
 #include "i2c.h"
@@ -72,6 +73,7 @@ int main(int argc, char **argv)
 {
 	struct ring_buffer *ring_buf = NULL;
 	struct i2c_bpf *skel;
+	time_t endtime;
 	int err;
 
 	/* Set up libbpf errors and debug info callback */
@@ -105,17 +107,24 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
+	endtime = time(NULL) + 3600;
+
 	printf("Hermes Successfully started! Please run `sudo cat /sys/kernel/debug/tracing/trace_pipe` "
 	       "to see output of the BPF programs.\n");
 
-#if 0
-	for (;;) {
-		sleep(1);
+	while (1) {
+		err = ring_buffer__poll(ring_buf, 100);
+		if (err == -EINTR) {
+			break;
+		}
+		if (err < 0) {
+			fprintf(stderr, "Error polling ring buffer: %d\n", err);
+			break;
+		}
+		if (time(NULL) > endtime) {
+			break;
+		}
 	}
-#endif
-	while (ring_buffer__poll(ring_buf, -1) >= 0) {
-	}
-
 
 cleanup:
 	ring_buffer__free(ring_buf);
