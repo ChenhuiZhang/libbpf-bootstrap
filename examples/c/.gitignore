@@ -2,6 +2,7 @@
 /bootstrap
 /bootstrap_legacy
 /bq27xxx
+/i2c
 /minimal
 /minimal_legacy
 /minimal_ns

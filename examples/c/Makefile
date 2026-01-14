@@ -25,7 +25,7 @@ CFLAGS := -g -Wall
 ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 
 APPS = minimal minimal_legacy minimal_ns bootstrap bootstrap_legacy uprobe kprobe fentry \
-       usdt sockfilter tc ksyscall task_iter lsm bq27xxx
+       usdt sockfilter tc ksyscall task_iter lsm bq27xxx i2c
 
 CARGO ?= $(shell which cargo)
 ifeq ($(strip $(CARGO)),)
