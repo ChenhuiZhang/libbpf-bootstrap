@@ -3,6 +3,7 @@
 /bootstrap_legacy
 /bq27xxx
 /i2c
+/memleak
 /minimal
 /minimal_legacy
 /minimal_ns
