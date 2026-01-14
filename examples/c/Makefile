@@ -94,13 +94,21 @@ $(BPFTOOL): | $(BPFTOOL_OUTPUT)
 	$(call msg,BPFTOOL,$@)
 	$(Q)$(MAKE) ARCH= CROSS_COMPILE= OUTPUT=$(BPFTOOL_OUTPUT)/ -C $(BPFTOOL_SRC) bootstrap
 
+# Detect cross-compilation for Rust/blazesym
+ifeq ($(ARCH),arm64)
+CARGO_BUILD_CMD = cross build --target aarch64-unknown-linux-gnu --package=blazesym-c --release
+BLAZESYM_TARGET_DIR = $(LIBBLAZESYM_SRC)/target/aarch64-unknown-linux-gnu/release
+else
+CARGO_BUILD_CMD = $(CARGO) build --package=blazesym-c --release
+BLAZESYM_TARGET_DIR = $(LIBBLAZESYM_SRC)/target/release
+endif
 
-$(LIBBLAZESYM_SRC)/target/release/libblazesym_c.a::
-	$(Q)cd $(LIBBLAZESYM_SRC) && $(CARGO) build --package=blazesym-c --release
+$(BLAZESYM_TARGET_DIR)/libblazesym_c.a::
+	$(Q)cd $(LIBBLAZESYM_SRC) && $(CARGO_BUILD_CMD)
 
-$(LIBBLAZESYM_OBJ): $(LIBBLAZESYM_SRC)/target/release/libblazesym_c.a | $(OUTPUT)
+$(LIBBLAZESYM_OBJ): $(BLAZESYM_TARGET_DIR)/libblazesym_c.a | $(OUTPUT)
 	$(call msg,LIB, $@)
-	$(Q)cp $(LIBBLAZESYM_SRC)/target/release/libblazesym_c.a $@
+	$(Q)cp $(BLAZESYM_TARGET_DIR)/libblazesym_c.a $@
 
 # Build BPF code
 $(OUTPUT)/%.bpf.o: %.bpf.c $(LIBBPF_OBJ) $(wildcard %.h) $(VMLINUX) | $(OUTPUT) $(BPFTOOL)
