@@ -11,6 +11,17 @@
 #include "blazesym.h"
 #include "memleak.h"
 
+// Structure to track stack trace statistics
+struct stack_count {
+  __s32 stack_id;
+  int count;
+  size_t total_bytes;
+};
+
+#define MAX_UNIQUE_STACKS 1024
+static struct stack_count stack_stats[MAX_UNIQUE_STACKS];
+static int unique_stack_count = 0;
+
 static char *
 find_libc_path(pid_t pid)
 {
@@ -220,6 +231,103 @@ show_stack_trace(__u64 *stack, int stack_sz, pid_t pid)
 }
 
 static void
+update_stack_stats(__s32 stack_id, size_t size)
+{
+  // Find existing entry or create new one
+  for (int i = 0; i < unique_stack_count; i++) {
+    if (stack_stats[i].stack_id == stack_id) {
+      stack_stats[i].count++;
+      stack_stats[i].total_bytes += size;
+      return;
+    }
+  }
+
+  // Add new entry
+  if (unique_stack_count < MAX_UNIQUE_STACKS) {
+    stack_stats[unique_stack_count].stack_id = stack_id;
+    stack_stats[unique_stack_count].count = 1;
+    stack_stats[unique_stack_count].total_bytes = size;
+    unique_stack_count++;
+  }
+}
+
+static int
+compare_stack_counts(const void *a, const void *b)
+{
+  const struct stack_count *sa = (const struct stack_count *)a;
+  const struct stack_count *sb = (const struct stack_count *)b;
+  // Sort by total bytes (descending)
+  if (sb->total_bytes > sa->total_bytes) return 1;
+  if (sb->total_bytes < sa->total_bytes) return -1;
+  return 0;
+}
+
+static void
+print_stack_summary(struct bpf_map *m2)
+{
+  if (unique_stack_count == 0) {
+    fprintf(stderr, "\n=== No leaks detected ===\n");
+    return;
+  }
+
+  // Sort by total bytes
+  qsort(stack_stats, unique_stack_count, sizeof(struct stack_count), compare_stack_counts);
+
+  fprintf(stderr, "\n=== Leak Summary (by stack trace) ===\n");
+  fprintf(stderr, "Total unique stack traces: %d\n", unique_stack_count);
+
+  // Count and filter stacks with count <= 1
+  int suppressed_count = 0;
+  int displayed_count = 0;
+  for (int i = 0; i < unique_stack_count; i++) {
+    if (stack_stats[i].count <= 1) {
+      suppressed_count++;
+    } else {
+      displayed_count++;
+    }
+  }
+
+  if (suppressed_count > 0) {
+    fprintf(stderr, "Suppressed %d stack trace(s) with single allocation (count <= 1)\n", suppressed_count);
+  }
+  fprintf(stderr, "\n");
+
+  for (int i = 0; i < unique_stack_count; i++) {
+    // Skip stacks with count <= 1
+    if (stack_stats[i].count <= 1) {
+      continue;
+    }
+
+    fprintf(stderr, "[%d] Stack ID: %d, Count: %d allocations, Total: %zu bytes\n",
+            i + 1, stack_stats[i].stack_id, stack_stats[i].count, stack_stats[i].total_bytes);
+
+    // Print the stack trace for this ID
+    if (stack_stats[i].stack_id >= 0) {
+      memset(g_stacks, 0, g_stacks_size);
+      if (bpf_map__lookup_elem(m2,
+                               &stack_stats[i].stack_id,
+                               sizeof(stack_stats[i].stack_id),
+                               g_stacks,
+                               g_stacks_size,
+                               0) == 0) {
+        int stack_size = 0;
+        for (int j = 0; j < MAX_STACK_DEPTH; j++) {
+          if (0 == g_stacks[j]) break;
+          stack_size++;
+        }
+        show_stack_trace(g_stacks, stack_size, attach_pid);
+      }
+    }
+    fprintf(stderr, "\n");
+  }
+
+  if (displayed_count == 0) {
+    fprintf(stderr, "No stack traces with multiple allocations to display.\n");
+  }
+  fprintf(stderr, "=== End of Summary ===\n\n");
+}
+
+static void
 walk_hash_elements(struct bpf_map *map, struct bpf_map *m2)
 {
   // const size_t stack_traces_key_size = bpf_map__key_size(m2);
@@ -227,6 +335,10 @@ walk_hash_elements(struct bpf_map *map, struct bpf_map *m2)
   __u64 next_key;
   struct alloc_info info;
   int err;
+
+  // Reset statistics for this iteration
+  unique_stack_count = 0;
+  memset(stack_stats, 0, sizeof(stack_stats));
 
   for (;;) {
     err = bpf_map__get_next_key(map, cur_key, &next_key, sizeof(next_key));
@@ -251,6 +363,9 @@ walk_hash_elements(struct bpf_map *map, struct bpf_map *m2)
       cur_key = &next_key;
       continue;
     }
+
+    // Update statistics
+    update_stack_stats(info.stack_id, info.size);
 
     // Clear stack buffer before lookup to avoid stale data
     memset(g_stacks, 0, g_stacks_size);
@@ -281,6 +396,9 @@ walk_hash_elements(struct bpf_map *map, struct bpf_map *m2)
 
     cur_key = &next_key;
   }
+
+  // Print summary of stack traces
+  print_stack_summary(m2);
 }
 
 static void
